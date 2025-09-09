@@ -1,0 +1,884 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Location Analytics — HR Metrics (All-in-one)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <style>
+    :root { --bg:#f6f7fb; --card:#fff; --muted:#6b7280; --accent:#2563eb; --warn:#f59e0b; --danger:#ef4444; --text:#111827; }
+    body { font-family: system-ui, -apple-system, Arial, sans-serif; margin:0; background:var(--bg); color:var(--text); }
+    header { padding:12px 16px; background:#0f1724; color:#fff; font-weight:700; display:flex; justify-content:space-between; align-items:center;}
+    main { padding:12px 16px 24px; max-width:1200px; margin:0 auto; }
+    .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    .panel { background:var(--card); border:1px solid #e5e7eb; border-radius:10px; padding:10px 12px; }
+    .metrics { display:grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap:8px; margin-top:8px; }
+    @media (min-width:900px){ .metrics { grid-template-columns: repeat(4, minmax(220px, 1fr)); } }
+    .metric { background:var(--card); border:1px solid #e5e7eb; border-radius:10px; padding:10px 12px; }
+    .metric .k { font-size:12px; color:var(--muted); }
+    .metric .v { font-size:18px; font-weight:700; margin-top:6px; word-break:break-word; }
+    #map { height:520px; background:#eef2ff; border:1px solid #e5e7eb; border-radius:12px; margin-top:8px; }
+    select, input[type="date"], input[type="number"], input[type="file"] { padding:6px 8px; border-radius:8px; border:1px solid #e5e7eb; background:#fff; }
+    button { padding:6px 10px; border-radius:8px; border:1px solid #e5e7eb; background:#fff; cursor:pointer; }
+    button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+    button.warn { background:var(--warn); color:#07190f; border-color:var(--warn); }
+    .legend { font-size:12px; color:var(--muted); }
+    .pill { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid #e5e7eb; background:#f9fafb; }
+    table.app-table { width:100%; border-collapse:collapse; font-size:13px; }
+    table.app-table th, table.app-table td { border:1px solid #eef2ff; padding:6px; text-align:left; }
+    table.small { width:100%; border-collapse:collapse; font-size:13px; margin-top:8px; }
+    table.small th, table.small td { border:1px solid #eef2ff; padding:6px; text-align:left; }
+    .muted { color:var(--muted); font-size:13px; }
+    .top-pills { display:flex; gap:8px; align-items:center; }
+  </style>
+</head>
+<body>
+  <header>
+    <div style="display:flex;gap:12px;align-items:center">
+      <div style="width:44px;height:44px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#7cc3ff)"></div>
+      <div>
+        <div style="font-size:18px">📍 Location Analytics — HR Metrics</div>
+        <div class="muted">Duplicates, Accuracy, Speed, Foreground/Background, Device & App KPIs</div>
+      </div>
+    </div>
+    <div class="row top-pills" style="gap:8px">
+      <div class="pill" id="summaryDevicesTotal">Devices: 0</div>
+      <div class="pill" id="summaryDevicesAndroid">Android: 0</div>
+      <div class="pill" id="summaryDevicesIOS">iOS: 0</div>
+      <div class="pill" id="summaryPoints">Points: 0</div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Controls -->
+    <div class="row panel" style="justify-content:space-between;">
+      <div class="row" style="gap:10px; align-items:center;">
+        <input type="file" id="csvInput" accept=".csv" />
+        <div class="muted" style="max-width:560px">
+          Required (aliases accepted): <b>Latitude, Longitude, Activity/Speed, RecordedAt, TimeZone, AAID, LocationID, AppPackage/BundleID (opt), AppState, OS, Network, Online</b>
+        </div>
+      </div>
+      <div class="row" style="gap:6px; align-items:center;">
+        <label class="muted">Single Date</label>
+        <input type="date" id="singleDate" />
+        <label class="muted">Multiple Dates</label>
+        <select id="multiDates" multiple size="3" style="min-width:180px;"></select>
+        <button id="applyDates" class="primary">Apply</button>
+        <button id="clearDates">Clear</button>
+      </div>
+    </div>
+
+    <!-- Exports / Fake -->
+    <div class="row panel" style="justify-content:space-between;margin-top:8px">
+      <div class="row" style="gap:8px;align-items:center">
+        <div class="muted"><b>Fake Points</b> (demo)</div>
+        <label class="muted">Per Row</label>
+        <input type="number" id="fakePerRow" min="0" max="5" value="1" style="width:88px" />
+        <button id="addFakes" class="warn">Add Fake Points</button>
+        <button id="clearFakes">Clear Fake Points</button>
+      </div>
+      <div class="row" style="gap:6px">
+        <button id="downloadCsv">⬇️ Download Report (CSV)</button>
+        <button id="downloadXlsx">⬇️ Download Report (Excel)</button>
+        <button id="downloadPdf" class="primary">📥 Download PDF</button>
+      </div>
+    </div>
+
+    <!-- Metrics -->
+    <div style="margin-top:12px" class="panel">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <h3 style="margin:0">HR Metrics</h3>
+          <div class="muted">Metrics reflect the active filters (date + map filter)</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <div class="pill">Moving: <b style="color:var(--accent)">Blue</b></div>
+          <div class="pill">Visits: <b style="color:var(--danger)">Red</b></div>
+        </div>
+      </div>
+
+      <div id="metrics" class="metrics" style="margin-top:12px"></div>
+    </div>
+
+    <!-- Max HA table -->
+    <div class="panel" style="margin-top:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <strong>Max / Min / Avg Horizontal Accuracy (by Date — filtered)</strong>
+          <div class="muted">Daily rows updated for the currently selected dates & filters (max/min/avg + time-of-max)</div>
+        </div>
+      </div>
+      <table class="small" id="maxHATable" style="margin-top:8px">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Moving — Max (m) @time</th>
+            <th>Moving — Min (m)</th>
+            <th>Moving — Avg (m)</th>
+            <th>Visits — Max (m) @time</th>
+            <th>Visits — Min (m)</th>
+            <th>Visits — Avg (m)</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <!-- App details -->
+    <div id="appPanel" class="panel" style="margin-top:12px;display:none">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><strong>App Location Counts (per app)</strong></div>
+        <div class="muted">Shows total locations + foreground/background split + Android/iOS split</div>
+      </div>
+      <div id="appDetails" style="margin-top:8px"></div>
+    </div>
+
+    <!-- Map filters + map -->
+    <div class="panel" style="margin-top:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="display:flex;gap:12px;align-items:center">
+          <div class="muted"><strong>Map Filters</strong></div>
+          <select id="mapFilter">
+            <option value="all">All</option>
+            <option value="moving">Moving</option>
+            <option value="visits">Visits</option>
+            <option value="dup_all">All Duplicates</option>
+            <option value="dup_moving">Moving Duplicates</option>
+            <option value="dup_visits">Visit Duplicates</option>
+            <option value="move_ha_50">Moving HA ≥ 50m</option>
+            <option value="visit_ha_30">Visits HA ≥ 30m</option>
+          </select>
+        </div>
+        <div class="muted">Legend: Moving = Blue · Visits = Red · Duplicates = Yellow ring</div>
+      </div>
+
+      <div id="map" style="margin-top:10px"></div>
+    </div>
+  </main>
+
+  <script>
+  // ---------------- Utilities ----------------
+  const normKey = s => String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  function buildKeyMap(rows, metaFields) {
+    const headers = Array.isArray(metaFields) && metaFields.length ? metaFields : (rows[0] ? Object.keys(rows[0]) : []);
+    const map = {}; headers.forEach(h => map[normKey(h)] = h); return map;
+  }
+  function getField(row, keyMap, aliases, def = '') {
+    for (const alias of aliases) {
+      const nk = normKey(alias);
+      if (keyMap[nk] !== undefined) { const v = row[keyMap[nk]]; if (v !== undefined && v !== null && v !== '') return v; }
+    }
+    for (const alias of aliases) {
+      if (row.hasOwnProperty(alias)) { const v = row[alias]; if (v !== undefined && v !== null && v !== '') return v; }
+    }
+    return def;
+  }
+  function toNum(v) {
+    if (v === null || v === undefined) return null;
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    const s = String(v).trim(); if (!s) return null;
+    const cleaned = s.replace(/[^0-9eE\.\-+]/g,''); const n = Number(cleaned);
+    return Number.isFinite(n) ? n : null;
+  }
+  function parseDate(v){ if(!v && v!==0) return null; const s = String(v).replace('T',' ').replace('Z','').trim(); const d = new Date(s); return isNaN(d) ? null : d; }
+  function ymd(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+  function hms(d){ return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0'); }
+  function classifyActivity(v, speed) {
+    const s = String(v || '').toLowerCase();
+    if (/^(stop|visit|stationary|idle)$/.test(s)) return 'visit';
+    if (/(move|moving|drive|travel|walk|run|transit)/.test(s)) return 'moving';
+    if (speed != null) return speed > 0.5 ? 'moving' : 'visit';
+    return '';
+  }
+  function classifyNetwork(v) {
+    const s = String(v || '').toLowerCase();
+    if (!s) return null;
+    if (/(wifi|wi[-\s]?fi|wlan)/.test(s)) return 'wifi';
+    if (/(cell|mobile|3g|4g|5g|lte|edge|gprs|umts|hspa)/.test(s)) return 'cell';
+    return null;
+  }
+  function classifyOnline(v) {
+    const s = String(v || '').toLowerCase();
+    if (!s) return null;
+    if (/(^|[^a-z])online([^a-z]|$)|\b1\b|true|on/.test(s)) return 'online';
+    if (/(^|[^a-z])offline([^a-z]|$)|\b0\b|false|off/.test(s)) return 'offline';
+    return null;
+  }
+  function classifyAppState(v) {
+    const s = String(v || '').toLowerCase();
+    if (!s) return null;
+    if (/(foreground|fg|front)/.test(s)) return 'foreground';
+    if (/(background|bg|back)/.test(s)) return 'background';
+    return null;
+  }
+  function classifyOS(v){
+    const s = String(v || '').toLowerCase();
+    if (!s) return null;
+    if (/android/.test(s)) return 'android';
+    if (/ios|iphone|ipad/.test(s)) return 'ios';
+    return 'other';
+  }
+  function stats(arr){
+    const c = arr.filter(x => x!=null && Number.isFinite(x));
+    if (!c.length) return { max:null, min:null, avg:null, count:0, pct: t=>0 };
+    const max = Math.max(...c), min = Math.min(...c), avg = c.reduce((a,b)=>a+b,0)/c.length;
+    return { max, min, avg, count:c.length, pct: t => 100 * c.filter(x => x >= t).length / c.length };
+  }
+  function fmt(n, decimals=1){ if(n===null || n===undefined || Number.isNaN(Number(n))) return '—'; return Number(n).toFixed(decimals); }
+
+  const A = {
+    lat:       ['Latitude','latitude','lat','gpslat','y','latdeg','lat_','gps_lat'],
+    lng:       ['Longitude','longitude','long','lng','gpslng','gpslon','x','lon','londeg','longtitude'],
+    activity:  ['Activity','activity','Mode','mode','Motion','motion','MotionType','motionType','Status','isMoving'],
+    speed:     ['Speed','speed','kmph','kmh','velocity','Velocity'],
+    acc:       ['HorizontalAccuracy','horizontalAccuracy','Accuracy','accuracy','acc','hacc','hAccuracy','ha','horiz_acc'],
+    recorded:  ['RecordedAt','recorded_at','Recorded At','Timestamp','Time','DateTime','Datetime','created_at','CreatedAt','EventTime','LogTime','recorded'],
+    timezone:  ['TimeZone','timezone','tz','UTCOffset','Offset','Time Zone'],
+    aaid:      ['AAID','aaid','ad_id','adid','idfa','IDFA','deviceid','device_id','idfv','IDFV'],
+    locationId:['LocationID','location_id','LocID','locid','RecordID','PointID','id','locationid'],
+    network:   ['Network','network','Connection','Conn','ConnType','NetworkType','Bearer','Carrier'],
+    online:    ['Online','online','Status','NetStatus','ConnectivityStatus','ConnectionStatus','IsOnline'],
+    state:     ['AppState','app_state','State','state','App Mode','AppMode','ForegroundBackground','FG_BG','fgbg','appstate'],
+    os:        ['OS','os','Platform','platform','DeviceOS','device_os'],
+    app:       ['AppPackage','PackageName','BundleID','bundle','App','AppID','package','package_name','bundleid','app_package','appname']
+  };
+
+  // ---------------- Data state ----------------
+  let REAL_ROWS = [];
+  let FAKE_ROWS = [];
+  let ALL_ROWS = [];
+  let FILTERED_ROWS = [];
+  let headerMap = {};
+  let currentMapFilter = 'all';
+
+  // ---------------- Map ----------------
+  const map = L.map('map',{preferCanvas:true}).setView([20,78],5);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+  const gMoving = L.featureGroup().addTo(map);
+  const gVisits = L.featureGroup().addTo(map);
+  const gDup = L.featureGroup().addTo(map);
+
+  function keyOf(r){
+    // key used to detect duplicates: lat,lng,recorded,timezone,aaid (locationId intentionally excluded)
+    return [
+      r.lat?.toFixed ? r.lat.toFixed(6) : r.lat,
+      r.lng?.toFixed ? r.lng.toFixed(6) : r.lng,
+      String(r.recorded || '').trim(),
+      String(r.timezone || '').trim(),
+      String(r.aaid || '').trim()
+    ].join('|');
+  }
+
+  function computeDuplicates(rows){
+    // Duplicate rule: same lat, same long, same recorded at, same timezone, same AAID, but different LocationID
+    const seen = new Map();
+    let dupTotal=0, dupMove=0, dupVisit=0;
+    const dupKeysAll = new Set(), dupKeysMove = new Set(), dupKeysVisit = new Set();
+    for(const r of rows){
+      const k = keyOf(r);
+      const prev = seen.get(k);
+      if(prev === undefined) {
+        seen.set(k, String(r.locationId||''));
+      } else if(String(prev) !== String(r.locationId||'')){
+        // treat as duplicate (same key but different locationId)
+        dupTotal++;
+        dupKeysAll.add(k);
+        if(r.activity==='moving'){ dupMove++; dupKeysMove.add(k); }
+        if(r.activity==='visit'){ dupVisit++; dupKeysVisit.add(k); }
+      }
+    }
+    return {dupTotal,dupMove,dupVisit,dupKeysAll,dupKeysMove,dupKeysVisit};
+  }
+
+  function wantPredicate(r, filterMode, dupMeta){
+    switch(filterMode){
+      case 'moving': return r.activity==='moving';
+      case 'visits': return r.activity==='visit';
+      case 'dup_all': return dupMeta.dupKeysAll.has(keyOf(r));
+      case 'dup_moving': return dupMeta.dupKeysMove.has(keyOf(r));
+      case 'dup_visits': return dupMeta.dupKeysVisit.has(keyOf(r));
+      case 'move_ha_50': return r.activity==='moving' && r.acc!=null && r.acc>=50;
+      case 'visit_ha_30': return r.activity==='visit' && r.acc!=null && r.acc>=30;
+      default: return true;
+    }
+  }
+
+  function refreshMap(rows, filterMode, dupMeta){
+    gMoving.clearLayers(); gVisits.clearLayers(); gDup.clearLayers();
+    const bounds = [];
+    for(const r of rows){
+      if(!wantPredicate(r, filterMode, dupMeta)) continue;
+      if(r.lat==null || r.lng==null) continue;
+      const isFake = r.__fake===true;
+      const color = (r.activity==='moving') ? '#2563eb' : '#ef4444';
+      const markerOpts = { radius: isFake?4:5, color, fillColor:color, fillOpacity:isFake?0.45:0.9 };
+      const m = L.circleMarker([r.lat,r.lng], markerOpts).bindPopup(
+        `<b>${r.activity || 'unknown'}${isFake ? ' (FAKE)' : ''}</b><br>` +
+        `Lat: ${r.lat}, Lon: ${r.lng}` +
+        (r.speed!=null ? `<br>Speed: ${Number(r.speed).toFixed(1)} km/h` : '') +
+        (r.acc!=null ? `<br>HA: ${Number(r.acc).toFixed(1)} m` : '') +
+        (r.recorded ? `<br>Recorded: ${r.recorded}` : '') +
+        (r.app ? `<br>App: ${r.app}` : '') +
+        (r.aaid ? `<br>Device: ${r.aaid}` : '')
+      );
+      if(r.activity==='moving') gMoving.addLayer(m); else gVisits.addLayer(m);
+      bounds.push([r.lat,r.lng]);
+    }
+    // duplicate rings
+    rows.forEach(r => {
+      const k = keyOf(r);
+      if(dupMeta.dupKeysAll.has(k)) {
+        L.circle([r.lat,r.lng], { radius:20, color:'#f59e0b', weight:2, fill:false }).addTo(gDup);
+      }
+    });
+    if(bounds.length) map.fitBounds(bounds,{padding:[30,30]});
+  }
+
+  // ---------------- Max HA by date (daily) on filtered rows ----------------
+  // produce object: { 'YYYY-MM-DD': { moving:{max,at,min,avg,count}, visit:{...} } }
+  function computeHAStatsByDate(rows){
+    const byDate = {};
+    for(const r of rows){
+      if(r.acc==null) continue;
+      const d = parseDate(r.recorded); if(!d) continue;
+      const key = ymd(d);
+      if(!byDate[key]) byDate[key] = { moving:[], visit:[] };
+      if(r.activity==='moving') byDate[key].moving.push({acc:Number(r.acc), at:hms(d), recorded: r.recorded});
+      else if(r.activity==='visit') byDate[key].visit.push({acc:Number(r.acc), at:hms(d), recorded: r.recorded});
+    }
+    const out = {};
+    for(const dt of Object.keys(byDate)){
+      const marr = byDate[dt].moving, varr = byDate[dt].visit;
+      const mk = { max:null, at:null, min:null, avg:null, count:0 };
+      if(marr.length){
+        const vals = marr.map(x=>x.acc);
+        mk.max = Math.max(...vals);
+        mk.min = Math.min(...vals);
+        mk.avg = vals.reduce((a,b)=>a+b,0)/vals.length;
+        mk.count = vals.length;
+        const mx = marr.find(x=>x.acc === mk.max);
+        mk.at = mx ? mx.at : null;
+      }
+      const vk = { max:null, at:null, min:null, avg:null, count:0 };
+      if(varr.length){
+        const vals = varr.map(x=>x.acc);
+        vk.max = Math.max(...vals);
+        vk.min = Math.min(...vals);
+        vk.avg = vals.reduce((a,b)=>a+b,0)/vals.length;
+        vk.count = vals.length;
+        const mx = varr.find(x=>x.acc === vk.max);
+        vk.at = mx ? mx.at : null;
+      }
+      out[dt] = { moving:mk, visit:vk };
+    }
+    return out;
+  }
+
+  function renderMaxHATable(rows){
+    const tbody = document.querySelector('#maxHATable tbody');
+    tbody.innerHTML = '';
+    const obj = computeHAStatsByDate(rows);
+    const dates = Object.keys(obj).sort();
+    if(!dates.length){
+      tbody.innerHTML = `<tr><td colspan="7" class="muted">No data</td></tr>`;
+      return;
+    }
+    for(const d of dates){
+      const m = obj[d].moving, v = obj[d].visit;
+      const mMax = m.max!=null ? `${m.max.toFixed(1)} @ ${m.at||'--'}` : '—';
+      const mMin = m.min!=null ? m.min.toFixed(1) : '—';
+      const mAvg = m.avg!=null ? m.avg.toFixed(1) : '—';
+      const vMax = v.max!=null ? `${v.max.toFixed(1)} @ ${v.at||'--'}` : '—';
+      const vMin = v.min!=null ? v.min.toFixed(1) : '—';
+      const vAvg = v.avg!=null ? v.avg.toFixed(1) : '—';
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${d}</td><td>${mMax}</td><td>${mMin}</td><td>${mAvg}</td><td>${vMax}</td><td>${vMin}</td><td>${vAvg}</td>`;
+      tbody.appendChild(tr);
+    }
+  }
+
+  // ---------------- Metrics calculation & render ----------------
+  function calculateHRMetrics(rows){
+    const total = rows.length;
+    const osA = rows.filter(r=>r.os==='android').length;
+    const osI = rows.filter(r=>r.os==='ios').length;
+    const movingArr = rows.filter(r=>r.activity==='moving');
+    const visitArr = rows.filter(r=>r.activity==='visit');
+    const dup = computeDuplicates(rows);
+    const moveAcc = stats(movingArr.map(r=>r.acc));
+    const visitAcc = stats(visitArr.map(r=>r.acc));
+    const moveSpd = stats(movingArr.map(r=>r.speed));
+    const online = rows.filter(r=>r.online==='online').length;
+    const offline = rows.filter(r=>r.online==='offline').length;
+    const wifi = rows.filter(r=>r.network==='wifi').length;
+    const cell = rows.filter(r=>r.network==='cell').length;
+    const fg = rows.filter(r=>r.appState==='foreground').length;
+    const bg = rows.filter(r=>r.appState==='background').length;
+    const uniqSet = new Set(rows.map(r=>String(r.aaid||'')).filter(s=>s));
+    const androidDevices = new Set(rows.filter(r=>r.os==='android').map(r=>String(r.aaid||'')).filter(s=>s));
+    const iosDevices = new Set(rows.filter(r=>r.os==='ios').map(r=>String(r.aaid||'')).filter(s=>s));
+    const appCounts = {};
+    rows.forEach(r=>{
+      const a = r.app || 'unknown_app';
+      if(!appCounts[a]) appCounts[a] = { total:0, fg:0, bg:0, moving:0, visits:0, fromAndroid:0, fromIOS:0 };
+      appCounts[a].total++;
+      if(r.appState==='foreground') appCounts[a].fg++;
+      if(r.appState==='background') appCounts[a].bg++;
+      if(r.activity==='moving') appCounts[a].moving++;
+      if(r.activity==='visit') appCounts[a].visits++;
+      if(r.os==='android') appCounts[a].fromAndroid++;
+      if(r.os==='ios') appCounts[a].fromIOS++;
+    });
+
+    const appSet = Object.keys(appCounts);
+
+    const res = {
+      "OS: (Android or iOS)" : `Android ${osA} · iOS ${osI}`,
+      "Total Location Points": total,
+      "Total Moving Points": movingArr.length,
+      "Total Visits Points": visitArr.length,
+      "Total Duplicate Points": dup.dupTotal,
+      "Total Moving Duplicate Points": dup.dupMove,
+      "Total Vist Duplicate Points": dup.dupVisit,
+      "Max Moving Horizontal Accuracy": moveAcc.max!=null?fmt(moveAcc.max):'—',
+      "Min Moving Horizontal Accuracy": moveAcc.min!=null?fmt(moveAcc.min):'—',
+      "Average Moving Horizontal Accuracy": moveAcc.avg!=null?fmt(moveAcc.avg):'—',
+      "Moving Horizontal Accuracy >= 50 Meters %": moveAcc.pct ? (moveAcc.pct(50).toFixed(1) + '%') : '0.0%',
+      "Max Visits Horizontal Accuracy": visitAcc.max!=null?fmt(visitAcc.max):'—',
+      "Min Visits Horizontal Accuracy": visitAcc.min!=null?fmt(visitAcc.min):'—',
+      "Average Visits Horizontal Accuracy": visitAcc.avg!=null?fmt(visitAcc.avg):'—',
+      "Visits Horizontal Accuracy >= 30 Meters %": visitAcc.pct ? (visitAcc.pct(30).toFixed(1) + '%') : '0.0%',
+      "Total Online Points": online,
+      "Total Offline Points": offline,
+      "Total WiFi Points": wifi,
+      "Total Cellular Points": cell,
+      "Total Foreground Points": fg,
+      "Total Background Points": bg,
+      "Max Moving Speed": moveSpd.max!=null?fmt(moveSpd.max):'—',
+      "Min Moving Speed": moveSpd.min!=null?fmt(moveSpd.min):'—',
+      "Average Moving Speed": moveSpd.avg!=null?fmt(moveSpd.avg):'—',
+      "Moving Speed >= 100 Km/h %": moveSpd.pct ? (moveSpd.pct(100).toFixed(1) + '%') : '0.0%',
+      "Total Number of Unique Device (Android: AAID/ iOS: IDFV)": uniqSet.size,
+      "Total Number of Android Unique Device": androidDevices.size,
+      "Total Number of iOS Unique Device": iosDevices.size,
+      "Total Apps": appSet.length,
+      "List of Apps": appSet.length ? appSet.join(', ') : '—',
+      "App Details (raw)": appCounts
+    };
+    return { metrics: res, dupMeta: dup, appCounts };
+  }
+
+  function renderMetricsAndApps(rows){
+    const { metrics, dupMeta, appCounts } = calculateHRMetrics(rows);
+    const grid = document.getElementById('metrics');
+    grid.innerHTML = '';
+
+    // desired order for display
+    const displayOrder = [
+      "OS: (Android or iOS)","Total Location Points","Total Moving Points","Total Visits Points",
+      "Total Duplicate Points","Total Moving Duplicate Points","Total Vist Duplicate Points",
+      "Max Moving Horizontal Accuracy","Min Moving Horizontal Accuracy","Average Moving Horizontal Accuracy","Moving Horizontal Accuracy >= 50 Meters %",
+      "Max Visits Horizontal Accuracy","Min Visits Horizontal Accuracy","Average Visits Horizontal Accuracy","Visits Horizontal Accuracy >= 30 Meters %",
+      "Total Online Points","Total Offline Points","Total WiFi Points","Total Cellular Points","Total Foreground Points","Total Background Points",
+      "Max Moving Speed","Min Moving Speed","Average Moving Speed","Moving Speed >= 100 Km/h %",
+      "Total Number of Unique Device (Android: AAID/ iOS: IDFV)","Total Number of Android Unique Device","Total Number of iOS Unique Device",
+      "Total Apps","List of Apps"
+    ];
+
+    for(const k of displayOrder){
+      if(!(k in metrics)) continue;
+      const div = document.createElement('div'); div.className='metric';
+      div.innerHTML = `<div class="k">${k}</div><div class="v">${metrics[k]}</div>`;
+      grid.appendChild(div);
+    }
+
+    // apps table with Android/iOS split
+    const appPanel = document.getElementById('appPanel');
+    const appDetails = document.getElementById('appDetails');
+    if(appCounts && Object.keys(appCounts).length){
+      appPanel.style.display = 'block';
+      let rowsHtml = `<table class="app-table"><thead><tr>
+        <th>App (Package/Bundle)</th><th>Total</th><th>FG</th><th>BG</th><th>Moving</th><th>Visits</th><th>Android</th><th>iOS</th>
+      </tr></thead><tbody>`;
+      Object.entries(appCounts).sort((a,b)=> b[1].total - a[1].total).forEach(([app,counts])=>{
+        rowsHtml += `<tr>
+          <td style="max-width:320px;word-break:break-word">${app}</td>
+          <td>${counts.total}</td>
+          <td>${counts.fg}</td>
+          <td>${counts.bg}</td>
+          <td>${counts.moving}</td>
+          <td>${counts.visits}</td>
+          <td>${counts.fromAndroid}</td>
+          <td>${counts.fromIOS}</td>
+        </tr>`;
+      });
+      rowsHtml += `</tbody></table>`;
+      appDetails.innerHTML = rowsHtml;
+    } else {
+      appPanel.style.display = 'none';
+      appDetails.innerHTML = '';
+    }
+
+    // summary pills
+    document.getElementById('summaryDevicesTotal').textContent = `Devices: ${metrics["Total Number of Unique Device (Android: AAID/ iOS: IDFV)"] || 0}`;
+    document.getElementById('summaryDevicesAndroid').textContent = `Android: ${metrics["Total Number of Android Unique Device"] || 0}`;
+    document.getElementById('summaryDevicesIOS').textContent = `iOS: ${metrics["Total Number of iOS Unique Device"] || 0}`;
+    document.getElementById('summaryPoints').textContent = `Points: ${metrics["Total Location Points"] || 0}`;
+
+    // render HA table for the currently filtered rows
+    renderMaxHATable(rows);
+
+    return dupMeta;
+  }
+
+  // ---------------- Date list & filter (FIXED: multiple selection) ----------------
+  function rebuildDateList(rows){
+    const s = new Set();
+    rows.forEach(r=>{ const d = parseDate(r.recorded); if(d) s.add(ymd(d)); });
+    const list = [...s].sort();
+    const sel = document.getElementById('multiDates');
+    sel.innerHTML = list.map(d=>`<option value="${d}">${d}</option>`).join('');
+  }
+
+  function applyDateFilter(){
+    const single = document.getElementById('singleDate').value;
+    const multi = Array.from(document.getElementById('multiDates').selectedOptions).map(o=>o.value);
+    // build wanted set of dates
+    const wanted = new Set([...multi, ...(single ? [single] : [])]);
+    if(wanted.size === 0){
+      FILTERED_ROWS = ALL_ROWS.slice();
+      return;
+    }
+    FILTERED_ROWS = ALL_ROWS.filter(r=>{
+      const d = parseDate(r.recorded);
+      return d ? wanted.has(ymd(d)) : false;
+    });
+  }
+
+  // ---------------- CSV parse & normalization ----------------
+  document.getElementById('csvInput').addEventListener('change', e=>{
+    const file = e.target.files && e.target.files[0];
+    if(!file) return;
+    Papa.parse(file, {
+      header:true, dynamicTyping:false, skipEmptyLines:true,
+      complete: res=>{
+        const rowsRaw = res.data || [];
+        headerMap = buildKeyMap(rowsRaw, res.meta && res.meta.fields);
+        const normalized = rowsRaw.map(r=>{
+          const lat = toNum(getField(r, headerMap, A.lat));
+          const lng = toNum(getField(r, headerMap, A.lng));
+          const speed = toNum(getField(r, headerMap, A.speed));
+          const acc = toNum(getField(r, headerMap, A.acc));
+          const activityRaw = getField(r, headerMap, A.activity, '');
+          const appStateField = getField(r, headerMap, A.state, '');
+          const appState = classifyAppState(appStateField) || null;
+          const activity = classifyActivity(activityRaw, speed) || (speed!=null ? (speed>0.5 ? 'moving' : 'visit') : 'visit');
+          const recorded = getField(r, headerMap, A.recorded, '') || (new Date()).toISOString();
+          const timezone = getField(r, headerMap, A.timezone, '');
+          const aaid = getField(r, headerMap, A.aaid, '');
+          const locationId = getField(r, headerMap, A.locationId, '') || '';
+          const network = classifyNetwork(getField(r, headerMap, A.network, ''));
+          const online = classifyOnline(getField(r, headerMap, A.online, ''));
+          const os = classifyOS(getField(r, headerMap, A.os, ''));
+          const app = getField(r, headerMap, A.app, '') || '';
+          return { lat, lng, speed, acc, activity, recorded, timezone, aaid, locationId, network, online, appState, os, app, __fake:false };
+        }).filter(r=>r.lat!=null && r.lng!=null);
+        REAL_ROWS = normalized;
+        FAKE_ROWS = [];
+        ALL_ROWS = [...REAL_ROWS];
+        FILTERED_ROWS = ALL_ROWS.slice();
+        rebuildDateList(ALL_ROWS);
+        currentMapFilter = document.getElementById('mapFilter').value;
+        const dupMeta = computeDuplicates(FILTERED_ROWS);
+        const rowsForMetrics = FILTERED_ROWS.filter(r=> wantPredicate(r, currentMapFilter, dupMeta));
+        renderMetricsAndApps(rowsForMetrics);
+        refreshMap(FILTERED_ROWS, currentMapFilter, dupMeta);
+      },
+      error: err => { alert('CSV parse error: ' + err.message); console.error(err); }
+    });
+  });
+
+  // ---------------- Fake points ----------------
+  function jitter(val, meters){ const degLat = meters / 111111; return val + (Math.random()-0.5) * 2 * degLat; }
+  function jitterLng(lng, lat, meters){ const mPerDeg = 111111 * Math.cos((lat||0) * Math.PI/180); const degLng = meters / (mPerDeg || 1); return lng + (Math.random()-0.5) * 2 * degLng; }
+  function createFakeFromRow(r, idx){
+    const isMoving = (idx % 2 === 0);
+    const recordedDate = parseDate(r.recorded) || new Date();
+    const deltaMin = 1 + Math.floor(Math.random()*6);
+    const when = new Date(recordedDate.getTime() + (isMoving ? deltaMin : -deltaMin) * 60000);
+    const lat2 = jitter(r.lat, 15 + Math.random()*25);
+    const lng2 = jitterLng(r.lng, r.lat, 15 + Math.random()*25);
+    const acc = isMoving ? (20 + Math.random()*60) : (10 + Math.random()*50);
+    const speed = isMoving ? (5 + Math.random()*90) : 0;
+    const activity = isMoving ? 'moving' : 'visit';
+    return {
+      lat: lat2, lng: lng2, speed, acc, activity,
+      recorded: when.toISOString().slice(0,19).replace('T',' '),
+      timezone: r.timezone, aaid: r.aaid,
+      locationId: `FAKE_${r.locationId||'unk'}_${Date.now()}_${Math.floor(Math.random()*1000)}`,
+      network: r.network, online: r.online, appState: r.appState, os: r.os, app: r.app, __fake:true
+    };
+  }
+  function addFakePoints(perRow){
+    if(!REAL_ROWS.length){ alert('Upload a CSV first.'); return; }
+    perRow = Math.max(0, Math.min(5, Number(perRow)||0));
+    const news = [];
+    REAL_ROWS.forEach(r=>{ for(let i=0;i<perRow;i++) news.push(createFakeFromRow(r,i)); });
+    FAKE_ROWS = news;
+    ALL_ROWS = [...REAL_ROWS, ...FAKE_ROWS];
+    applyDateFilter();
+    const dupMeta = computeDuplicates(FILTERED_ROWS);
+    const rowsForMetrics = FILTERED_ROWS.filter(r=> wantPredicate(r, currentMapFilter, dupMeta));
+    renderMetricsAndApps(rowsForMetrics);
+    refreshMap(FILTERED_ROWS, currentMapFilter, dupMeta);
+    rebuildDateList(ALL_ROWS);
+  }
+  function clearFakePoints(){
+    FAKE_ROWS = [];
+    ALL_ROWS = [...REAL_ROWS];
+    applyDateFilter();
+    const dupMeta = computeDuplicates(FILTERED_ROWS);
+    const rowsForMetrics = FILTERED_ROWS.filter(r=> wantPredicate(r, currentMapFilter, dupMeta));
+    renderMetricsAndApps(rowsForMetrics);
+    refreshMap(FILTERED_ROWS, currentMapFilter, dupMeta);
+    rebuildDateList(ALL_ROWS);
+  }
+
+  // ---------------- Events ----------------
+  document.getElementById('applyDates').addEventListener('click', ()=>{
+    applyDateFilter();
+    const dupMeta = computeDuplicates(FILTERED_ROWS);
+    const rowsForMetrics = FILTERED_ROWS.filter(r=> wantPredicate(r, currentMapFilter, dupMeta));
+    renderMetricsAndApps(rowsForMetrics);
+    refreshMap(FILTERED_ROWS, currentMapFilter, dupMeta);
+  });
+  document.getElementById('clearDates').addEventListener('click', ()=>{
+    document.getElementById('singleDate').value = '';
+    Array.from(document.getElementById('multiDates').options).forEach(o=>o.selected=false);
+    FILTERED_ROWS = ALL_ROWS.slice();
+    const dupMeta = computeDuplicates(FILTERED_ROWS);
+    const rowsForMetrics = FILTERED_ROWS.filter(r=> wantPredicate(r, currentMapFilter, dupMeta));
+    renderMetricsAndApps(rowsForMetrics);
+    refreshMap(FILTERED_ROWS, currentMapFilter, dupMeta);
+  });
+  document.getElementById('mapFilter').addEventListener('change', e=>{
+    currentMapFilter = e.target.value;
+    const dupMeta = computeDuplicates(FILTERED_ROWS);
+    const rowsForMetrics = FILTERED_ROWS.filter(r=> wantPredicate(r, currentMapFilter, dupMeta));
+    renderMetricsAndApps(rowsForMetrics);
+    refreshMap(FILTERED_ROWS, currentMapFilter, dupMeta);
+  });
+  document.getElementById('addFakes').addEventListener('click', ()=> addFakePoints(document.getElementById('fakePerRow').value));
+  document.getElementById('clearFakes').addEventListener('click', clearFakePoints);
+
+  // ---------------- Exports (CSV/XLSX/PDF) ----------------
+  function buildDailyReport(rows){
+    const byDay = new Map();
+    for(const r of rows){ const d = parseDate(r.recorded); if(!d) continue; const key = ymd(d); if(!byDay.has(key)) byDay.set(key,[]); byDay.get(key).push(r); }
+    const header = [
+      'Date','OS: (Android or iOS)','Total Location Points','Total Moving Points','Total Visits Points',
+      'Total Duplicate Points','Total Moving Duplicate Points','Total Vist Duplicate Points',
+      'Max Moving Horizontal Accuracy','Min Moving Horizontal Accuracy','Average Moving Horizontal Accuracy','Moving Horizontal Accuracy >= 50 Meters %',
+      'Max Visits Horizontal Accuracy','Min Visits Horizontal Accuracy','Average Visits Horizontal Accuracy','Visits Horizontal Accuracy >= 30 Meters %',
+      'Total Online Points','Total Offline Points','Total WiFi Points','Total Cellular Points','Total Foreground Points','Total Background Points',
+      'Max Moving Speed','Min Moving Speed','Average Moving Speed','Moving Speed >= 100 Km/h %',
+      'Total Number of Unique Device (Android: AAID/ iOS: IDFV)','Total Number of Android Unique Device','Total Number of iOS Unique Device',
+      'Total Apps','List of Apps','App Details (JSON)'
+    ];
+    const lines = [header];
+    for(const [day, arr] of [...byDay.entries()].sort((a,b)=>a[0].localeCompare(b[0]))){
+      const { metrics } = calculateHRMetrics(arr);
+      lines.push([
+        day,
+        metrics['OS: (Android or iOS)'],
+        metrics['Total Location Points'],
+        metrics['Total Moving Points'],
+        metrics['Total Visits Points'],
+        metrics['Total Duplicate Points'],
+        metrics['Total Moving Duplicate Points'],
+        metrics['Total Vist Duplicate Points'],
+        metrics['Max Moving Horizontal Accuracy'],
+        metrics['Min Moving Horizontal Accuracy'],
+        metrics['Average Moving Horizontal Accuracy'],
+        metrics['Moving Horizontal Accuracy >= 50 Meters %'],
+        metrics['Max Visits Horizontal Accuracy'],
+        metrics['Min Visits Horizontal Accuracy'],
+        metrics['Average Visits Horizontal Accuracy'],
+        metrics['Visits Horizontal Accuracy >= 30 Meters %'],
+        metrics['Total Online Points'],
+        metrics['Total Offline Points'],
+        metrics['Total WiFi Points'],
+        metrics['Total Cellular Points'],
+        metrics['Total Foreground Points'],
+        metrics['Total Background Points'],
+        metrics['Max Moving Speed'],
+        metrics['Min Moving Speed'],
+        metrics['Average Moving Speed'],
+        metrics['Moving Speed >= 100 Km/h %'],
+        metrics['Total Number of Unique Device (Android: AAID/ iOS: IDFV)'],
+        metrics['Total Number of Android Unique Device'],
+        metrics['Total Number of iOS Unique Device'],
+        metrics['Total Apps'],
+        metrics['List of Apps'],
+        JSON.stringify(metrics['App Details (raw)'] || {})
+      ]);
+    }
+    if(rows.length){
+      const { metrics } = calculateHRMetrics(rows);
+      lines.push(['OVERALL',
+        metrics['OS: (Android or iOS)'],
+        metrics['Total Location Points'],
+        metrics['Total Moving Points'],
+        metrics['Total Visits Points'],
+        metrics['Total Duplicate Points'],
+        metrics['Total Moving Duplicate Points'],
+        metrics['Total Vist Duplicate Points'],
+        metrics['Max Moving Horizontal Accuracy'],
+        metrics['Min Moving Horizontal Accuracy'],
+        metrics['Average Moving Horizontal Accuracy'],
+        metrics['Moving Horizontal Accuracy >= 50 Meters %'],
+        metrics['Max Visits Horizontal Accuracy'],
+        metrics['Min Visits Horizontal Accuracy'],
+        metrics['Average Visits Horizontal Accuracy'],
+        metrics['Visits Horizontal Accuracy >= 30 Meters %'],
+        metrics['Total Online Points'],
+        metrics['Total Offline Points'],
+        metrics['Total WiFi Points'],
+        metrics['Total Cellular Points'],
+        metrics['Total Foreground Points'],
+        metrics['Total Background Points'],
+        metrics['Max Moving Speed'],
+        metrics['Min Moving Speed'],
+        metrics['Average Moving Speed'],
+        metrics['Moving Speed >= 100 Km/h %'],
+        metrics['Total Number of Unique Device (Android: AAID/ iOS: IDFV)'],
+        metrics['Total Number of Android Unique Device'],
+        metrics['Total Number of iOS Unique Device'],
+        metrics['Total Apps'],
+        metrics['List of Apps'],
+        JSON.stringify(metrics['App Details (raw)'] || {})
+      ]);
+    }
+
+    // Append Max HA by Date block (for the filtered set)
+    lines.push([]);
+    lines.push(['Max HA by Date (daily for filtered rows)']);
+    lines.push(['Date','Moving Max (m)','Moving Time','Moving Min (m)','Moving Avg (m)','Visits Max (m)','Visits Time','Visits Min (m)','Visits Avg (m)']);
+    const ha = computeHAStatsByDate(rows);
+    const dates = Object.keys(ha).sort();
+    for(const dt of dates){
+      const m = ha[dt].moving, v = ha[dt].visit;
+      lines.push([
+        dt,
+        m.max!=null?m.max.toFixed(1):'',
+        m.at||'',
+        m.min!=null?m.min.toFixed(1):'',
+        m.avg!=null?m.avg.toFixed(1):'',
+        v.max!=null?v.max.toFixed(1):'',
+        v.at||'',
+        v.min!=null?v.min.toFixed(1):'',
+        v.avg!=null?v.avg.toFixed(1):''
+      ]);
+    }
+
+    return lines;
+  }
+
+  function downloadCSV(rows){
+    const data = buildDailyReport(rows);
+    const csv = Papa.unparse(data);
+    const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href=url; a.download='HR_Location_Analytics_Report.csv'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  }
+  function downloadXLSX(rows){
+    const data = buildDailyReport(rows);
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Report'); XLSX.writeFile(wb, 'HR_Location_Analytics_Report.xlsx');
+  }
+
+  async function downloadPDF(rows){
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF('p','mm','a4');
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const left = 12; let y = 14;
+    pdf.setFont('helvetica','bold'); pdf.setFontSize(14); pdf.text('HR Location Analytics Report', left, y); y+=8;
+    pdf.setFont('helvetica','normal'); pdf.setFontSize(10); pdf.text('Generated: ' + new Date().toLocaleString(), left, y); y+=6;
+    pdf.text('Filter: ' + (document.getElementById('singleDate').value || (Array.from(document.getElementById('multiDates').selectedOptions).map(o=>o.value).join(', ') || 'ALL')), left, y); y+=8;
+    const dupMeta = computeDuplicates(rows);
+    const rowsForMetrics = rows.filter(r=> wantPredicate(r, currentMapFilter, dupMeta));
+    const { metrics } = calculateHRMetrics(rowsForMetrics);
+    pdf.setFont('helvetica','bold'); pdf.setFontSize(12); pdf.text('Metrics', left, y); y+=6;
+    pdf.setFont('helvetica','normal'); pdf.setFontSize(11);
+    for(const [k,v] of Object.entries(metrics)){
+      if(k === 'App Details (raw)') continue;
+      const line = `${k}: ${v}`;
+      const split = pdf.splitTextToSize(line, pageWidth - left*2);
+      if(y + split.length*6 > 280){ pdf.addPage(); y=14; }
+      pdf.text(split, left, y); y += split.length*6;
+    }
+    // Max HA block
+    const ha = computeHAStatsByDate(rows);
+    if(Object.keys(ha).length){
+      if(y + 40 > 280){ pdf.addPage(); y=14; }
+      pdf.setFont('helvetica','bold'); pdf.text('Max/Min/Avg HA by Date (filtered)', left, y); y+=6;
+      pdf.setFont('helvetica','normal');
+      for(const dt of Object.keys(ha).sort()){
+        const m = ha[dt].moving, v = ha[dt].visit;
+        const mText = m.max!=null?`${m.max.toFixed(1)} @ ${m.at}`:'—';
+        const vText = v.max!=null?`${v.max.toFixed(1)} @ ${v.at}`:'—';
+        const line = `${dt} → Moving: ${mText} (min:${m.min!=null?m.min.toFixed(1):'—'} avg:${m.avg!=null?m.avg.toFixed(1):'—'}) · Visit: ${vText} (min:${v.min!=null?v.min.toFixed(1):'—'} avg:${v.avg!=null?v.avg.toFixed(1):'—'})`;
+        const split = pdf.splitTextToSize(line, pageWidth - left*2);
+        if(y + split.length*6 > 280){ pdf.addPage(); y=14; }
+        pdf.text(split, left, y); y += split.length*6;
+      }
+    }
+
+    // map screenshot
+    pdf.addPage();
+    await new Promise(r=>setTimeout(r,350));
+    const mapEl = document.getElementById('map');
+    const canvas = await html2canvas(mapEl, {scale:2, useCORS:true});
+    const img = canvas.toDataURL('image/png');
+    const w = pageWidth - 24; const h = canvas.height * (w / canvas.width);
+    pdf.setFont('helvetica','bold'); pdf.setFontSize(12); pdf.text('Map (current view & filter)', 12, 12);
+    pdf.addImage(img, 'PNG', 12, 16, w, h);
+
+    pdf.save('HR_Location_Analytics_Report.pdf');
+  }
+
+  document.getElementById('downloadCsv').addEventListener('click', ()=> {
+    const rows = FILTERED_ROWS.length ? FILTERED_ROWS : ALL_ROWS;
+    if(!rows.length){ alert('No data to export.'); return; }
+    downloadCSV(rows);
+  });
+  document.getElementById('downloadXlsx').addEventListener('click', ()=> {
+    const rows = FILTERED_ROWS.length ? FILTERED_ROWS : ALL_ROWS;
+    if(!rows.length){ alert('No data to export.'); return; }
+    downloadXLSX(rows);
+  });
+  document.getElementById('downloadPdf').addEventListener('click', async ()=> {
+    const rows = FILTERED_ROWS.length ? FILTERED_ROWS : ALL_ROWS;
+    if(!rows.length){ alert('No data to export.'); return; }
+    await downloadPDF(rows);
+  });
+
+  // ---------------- Init empty ----------------
+  (function initEmpty(){
+    REAL_ROWS = []; FAKE_ROWS = []; ALL_ROWS = []; FILTERED_ROWS = [];
+    renderMetricsAndApps([]);
+    renderMaxHATable([]);
+  })();
+
+  // expose helpers for debugging
+  window._hr = { ALL_ROWS, REAL_ROWS, FILTERED_ROWS, renderMetricsAndApps, refreshMap, computeHAStatsByDate };
+
+  </script>
+</body>
+</html>
